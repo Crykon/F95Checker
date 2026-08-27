@@ -622,6 +622,11 @@ TexCompress = IntEnumHack("TexCompress", [
     ("BC7",      3),
 ])
 
+PreviewWebMCodec = IntEnumHack("PreviewWebMCodec", [
+    ("VP8", 1),
+    ("VP9", 2),
+])
+
 
 @dataclasses.dataclass(slots=True)
 class Filter:
@@ -911,6 +916,16 @@ class Settings:
     play_gifs_unfocused         : bool
     preload_nearby_images       : bool
     previews_enabled            : bool
+    
+    preview_max_dimension       : int
+    preview_jpeg_quality        : int
+    preview_preserve_animation  : bool
+    preview_webm_codec          : PreviewWebMCodec
+    preview_webm_quality        : int
+    preview_webm_speed          : int
+    preview_max_animation_frames: int
+    preview_max_animation_duration: int
+    
     proxy_type                  : ProxyType
     proxy_host                  : str
     proxy_port                  : int
