@@ -4,6 +4,7 @@ import datetime as dt
 import enum
 import functools
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -916,8 +917,6 @@ class Settings:
     play_gifs_unfocused         : bool
     preload_nearby_images       : bool
     previews_enabled            : bool
-    
-    preview_max_dimension       : int
     preview_jpeg_quality        : int
     preview_preserve_animation  : bool
     preview_webm_codec          : PreviewWebMCodec
@@ -1064,24 +1063,131 @@ class Game:
             from external import imagehelper
             from modules import api, globals, utils
             import aiofiles
+            from PIL import Image
             # A retry or resumed load may already have partially populated
             # this list. Use the normal cleanup path so existing textures and
             # decoded image data are released before rebuilding it.
             self.unload_previews()
             preview_dir = globals.images_path / f"previews/{self.id}"
+
+            def process_still(data: bytes):
+                """Return a validated, resized still-image derivative."""
+                from PIL import Image
+
+                with Image.open(io.BytesIO(data)) as source:
+                    source_format = (source.format or "").upper()
+                    if source_format not in ("JPEG", "AVIF"):
+                        return data
+                    image = source.copy()
+
+                # The owner UI displays previews at a fixed 200px logical
+                # height. Keep the cached derivative at 2x that resolution so
+                # downsampling in the gallery does not make it look blurry.
+                # Width is still derived from the source aspect ratio.
+                target_height = 400
+                if image.height > target_height:
+                    scale = target_height / image.height
+                    size = (
+                        max(1, round(image.width * scale)),
+                        target_height,
+                    )
+                    resized = image.resize(size, Image.Resampling.LANCZOS)
+                    image.close()
+                    image = resized
+                    resized_image = True
+                else:
+                    resized_image = False
+
+                if source_format == "AVIF" and not resized_image:
+                    image.close()
+                    return data
+
+                output = io.BytesIO()
+                if source_format == "JPEG":
+                    if image.mode not in ("RGB", "L"):
+                        image = image.convert("RGB")
+                    image.save(
+                        output,
+                        format="JPEG",
+                        quality=globals.settings.preview_jpeg_quality,
+                        optimize=True,
+                        progressive=True,
+                    )
+                else:
+                    # Keep AVIF as AVIF; Phase 3 does not unify formats.
+                    image.save(output, format="AVIF")
+                image.close()
+                processed = output.getvalue()
+
+                # Validate the exact bytes that will be written to disk.
+                with Image.open(io.BytesIO(processed)) as check:
+                    check.verify()
+                return processed
+
+            async def write_atomic(path: pathlib.Path, data: bytes):
+                temporary = path.with_name(f".{path.name}.tmp")
+                try:
+                    async with aiofiles.open(temporary, "wb") as file:
+                        await file.write(data)
+                    os.replace(temporary, path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+
             async def _maybe_fetch_preview(url: str, digest: str):
                 if not url.startswith(("http://", "https://")):
                     return
                 glob = f"{digest}.*"
                 paths = list(preview_dir.glob(glob))
+                source_paths = [
+                    path for path in paths
+                    if path.suffix.lower() in (".jpg", ".jpeg", ".avif")
+                ]
+                # KTX/ASTC/BC7 sidecars are not source images and may still
+                # contain an older full-size texture. Force a source download
+                # when the source file is absent instead of accepting them as
+                # a valid processed preview.
+                # GIFs are intentionally left for Phase 4. Keep an existing
+                # GIF cache entry valid while treating compressed-only still
+                # image sidecars as a cache miss.
+                paths = source_paths or [
+                    path for path in paths
+                    if path.suffix.lower() == ".gif"
+                ]
+                if source_paths:
+                    try:
+                        source_path = source_paths[0]
+                        def read_size():
+                            with Image.open(source_path) as existing:
+                                return existing.size
+                        existing_size = await asyncio.to_thread(read_size)
+                        if existing_size[1] > 400:
+                            existing_data = await asyncio.to_thread(source_path.read_bytes)
+                            processed = await asyncio.to_thread(process_still, existing_data)
+                            await write_atomic(source_path, processed)
+                        # Remove stale GPU derivatives so ImageHelper cannot
+                        # select a pre-processing full-size sidecar.
+                        for cached_path in preview_dir.glob(glob):
+                            if cached_path != source_path:
+                                cached_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
                 if not paths:
                     try:
                         data, _ = await api.download_image(url)
                         if data:
                             preview_dir.mkdir(parents=True, exist_ok=True)
-                            path = preview_dir / f"{digest}.{utils.image_ext(data)}"
-                            async with aiofiles.open(path, "wb") as f:
-                                await f.write(data)
+                            try:
+                                processed = await asyncio.to_thread(process_still, data)
+                            except Exception:
+                                # Keep a usable original if processing fails;
+                                # later phases will add a visible processing
+                                # error without losing the preview entirely.
+                                processed = data
+                            path = preview_dir / f"{digest}.{utils.image_ext(processed)}"
+                            await write_atomic(path, processed)
+                            for cached_path in preview_dir.glob(glob):
+                                if cached_path != path:
+                                    cached_path.unlink(missing_ok=True)
                     except Exception:
                         return
                 self.preview_images.append(imagehelper.ImageHelper(preview_dir, glob=glob))

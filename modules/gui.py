@@ -4630,16 +4630,6 @@ class MainGUI():
                 imgui.push_disabled()
 
             draw_settings_label(
-                "Preview max dimension:",
-                "Maximum width or height used for processed preview files. The original aspect ratio is preserved. "
-                "This setting will be applied by the preview-processing pipeline."
-            )
-            changed, value = imgui.drag_int("###preview_max_dimension", set.preview_max_dimension, change_speed=1, min_value=256, max_value=8192, format="%d px")
-            set.preview_max_dimension = min(max(value, 256), 8192)
-            if changed:
-                async_thread.run(db.update_settings("preview_max_dimension"))
-
-            draw_settings_label(
                 "JPEG quality:",
                 "Quality used when large JPEG previews are recompressed. Higher values preserve more detail and use more disk space."
             )

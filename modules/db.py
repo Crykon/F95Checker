@@ -237,7 +237,6 @@ async def connect():
             "play_gifs_unfocused":         f'INTEGER DEFAULT {int(False)}',
             "preload_nearby_images":       f'INTEGER DEFAULT {int(False)}',
             "previews_enabled":            f'INTEGER DEFAULT {int(False)}',
-            "preview_max_dimension":       f'INTEGER DEFAULT 1600',
             "preview_jpeg_quality":        f'INTEGER DEFAULT 85',
             "preview_preserve_animation":  f'INTEGER DEFAULT {int(True)}',
             "preview_webm_codec":          f'INTEGER DEFAULT {PreviewWebMCodec.VP8}',
