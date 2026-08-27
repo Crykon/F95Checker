@@ -2328,7 +2328,7 @@ class MainGUI():
             # Fullscreen image viewer
             fullscreen_viewer_id = f"###fullscreen_viewer_{game.id}"
             fullscreen_viewer_closed = False
-            if imgui.is_key_pressed(glfw.KEY_SPACE) and not imgui.is_popup_open(fullscreen_viewer_id):
+            if imgui.is_key_pressed(glfw.KEY_SPACE) and not imgui.is_popup_open(fullscreen_viewer_id) and imgui.is_topmost() and not imgui.is_any_item_active():
                 fullscreen_viewer_start = True
                 self.fullscreen_viewer_i = 0
             if fullscreen_viewer_start:

@@ -20,6 +20,7 @@
 - Locally tracked playtime duration (#290 by @cicklolwut)
 - Label reordering (#291 by @px-pole & WillyJL)
 - Donor DDL downloads can now be retried when failed (by @WillyJL)
+- Option to archive game when thread isn't found (by @WillyJL)
 
 ### Updated:
 - Animations (Video and GIF) and Comics (CG, Comics, Manga and Pinup) thread types are detected properly now, "Collection" and "SiteRip" prefixes are now ignored (by @WillyJL)
