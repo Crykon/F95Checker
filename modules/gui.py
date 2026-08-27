@@ -41,6 +41,7 @@ from common.structs import (
     MsgBox,
     Os,
     ProxyType,
+    PreviewWebMCodec,
     SortSpec,
     Status,
     Tab,
@@ -4624,6 +4625,82 @@ class MainGUI():
                 "previously downloaded preview images from disk. Default is off."
             )
             draw_settings_checkbox("previews_enabled")
+            
+            if not set.previews_enabled:
+                imgui.push_disabled()
+
+            draw_settings_label(
+                "Preview max dimension:",
+                "Maximum width or height used for processed preview files. The original aspect ratio is preserved. "
+                "This setting will be applied by the preview-processing pipeline."
+            )
+            changed, value = imgui.drag_int("###preview_max_dimension", set.preview_max_dimension, change_speed=1, min_value=256, max_value=8192, format="%d px")
+            set.preview_max_dimension = min(max(value, 256), 8192)
+            if changed:
+                async_thread.run(db.update_settings("preview_max_dimension"))
+
+            draw_settings_label(
+                "JPEG quality:",
+                "Quality used when large JPEG previews are recompressed. Higher values preserve more detail and use more disk space."
+            )
+            changed, value = imgui.drag_int("###preview_jpeg_quality", set.preview_jpeg_quality, change_speed=0.5, min_value=1, max_value=100, format="%d%%")
+            set.preview_jpeg_quality = min(max(value, 1), 100)
+            if changed:
+                async_thread.run(db.update_settings("preview_jpeg_quality"))
+
+            draw_settings_label(
+                "Preserve animation:",
+                "Keep animated previews animated when they are processed. Disabling this may store only a still image."
+            )
+            draw_settings_checkbox("preview_preserve_animation")
+
+            draw_settings_label(
+                "WebM codec:",
+                "Codec used when animated GIF previews are converted to WebM. VP8 is generally faster; VP9 may compress better."
+            )
+            changed, value = imgui.combo("###preview_webm_codec", set.preview_webm_codec._index_, PreviewWebMCodec._member_names_)
+            if changed:
+                set.preview_webm_codec = PreviewWebMCodec[PreviewWebMCodec._member_names_[value]]
+                async_thread.run(db.update_settings("preview_webm_codec"))
+
+            draw_settings_label(
+                "WebM quality:",
+                "Quality target for future GIF-to-WebM conversion. Higher values generally use more disk space."
+            )
+            changed, value = imgui.drag_int("###preview_webm_quality", set.preview_webm_quality, change_speed=0.5, min_value=1, max_value=100, format="%d%%")
+            set.preview_webm_quality = min(max(value, 1), 100)
+            if changed:
+                async_thread.run(db.update_settings("preview_webm_quality"))
+
+            draw_settings_label(
+                "WebM speed:",
+                "Encoding speed/CPU tradeoff for future GIF-to-WebM conversion. Higher values favor speed."
+            )
+            changed, value = imgui.drag_int("###preview_webm_speed", set.preview_webm_speed, change_speed=0.2, min_value=0, max_value=10, format="%d")
+            set.preview_webm_speed = min(max(value, 0), 10)
+            if changed:
+                async_thread.run(db.update_settings("preview_webm_speed"))
+
+            draw_settings_label(
+                "Maximum animation frames:",
+                "Optional frame limit for processed animations. Zero means unlimited."
+            )
+            changed, value = imgui.drag_int("###preview_max_animation_frames", set.preview_max_animation_frames, change_speed=1, min_value=0, max_value=10000, format="%d")
+            set.preview_max_animation_frames = min(max(value, 0), 10000)
+            if changed:
+                async_thread.run(db.update_settings("preview_max_animation_frames"))
+
+            draw_settings_label(
+                "Maximum animation duration:",
+                "Optional duration limit in seconds for processed animations. Zero means unlimited."
+            )
+            changed, value = imgui.drag_int("###preview_max_animation_duration", set.preview_max_animation_duration, change_speed=0.2, min_value=0, max_value=3600, format="%d s")
+            set.preview_max_animation_duration = min(max(value, 0), 3600)
+            if changed:
+                async_thread.run(db.update_settings("preview_max_animation_duration"))
+
+            if not set.previews_enabled:
+                imgui.pop_disabled()
 
             draw_settings_label("Play GIFs:")
             if draw_settings_checkbox("play_gifs"):
