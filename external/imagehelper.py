@@ -249,14 +249,14 @@ class ImageHelper:
                 self._missing = True
                 return
             if globals.settings.tex_compress is TexCompress.ASTC:
-                # Prefer ASTC (including .aastc for migration), then .gif, then anything else, then other compression
-                sorting = lambda path: 1 if path.name.endswith((".astc.ktx.zst", ".aastc")) else 2 if path.suffix == ".gif" else 3 if not path.name.endswith(".bc7.ktx.zst") else 4
+                # Prefer compressed textures, then WebM animations, then GIFs.
+                sorting = lambda path: 1 if path.name.endswith((".astc.ktx.zst", ".aastc")) else 2 if path.suffix == ".webm" else 3 if path.suffix == ".gif" else 4 if not path.name.endswith(".bc7.ktx.zst") else 5
             elif globals.settings.tex_compress is TexCompress.BC7:
-                # Prefer BC7, then .gif, then anything else, then other compression
-                sorting = lambda path: 1 if path.name.endswith(".bc7.ktx.zst") else 2 if path.suffix == ".gif" else 3 if not path.name.endswith((".astc.ktx.zst", ".aastc")) else 4
+                # Prefer BC7, then WebM animations, then GIFs, then anything else.
+                sorting = lambda path: 1 if path.name.endswith(".bc7.ktx.zst") else 2 if path.suffix == ".webm" else 3 if path.suffix == ".gif" else 4 if not path.name.endswith((".astc.ktx.zst", ".aastc")) else 5
             else:
-                # Prefer .gif files, avoid compressed files unless nothing else available
-                sorting = lambda path: 1 if path.suffix == ".gif" else 2 if path.suffix not in (".zst", ".aastc") else 3
+                # Prefer WebM animations, then GIFs, and avoid compressed files.
+                sorting = lambda path: 1 if path.suffix == ".webm" else 2 if path.suffix == ".gif" else 3 if path.suffix not in (".zst", ".aastc") else 4
             paths.sort(key=sorting)
             self.resolved_path = paths[0]
 
@@ -298,6 +298,42 @@ class ImageHelper:
         if self._missing:
             set_invalid("Image file missing")
             return
+
+        if self.resolved_path.suffix.lower() == ".webm":
+            try:
+                import av
+
+                with av.open(self.resolved_path, mode="r", format="webm") as container:
+                    stream = next(iter(container.streams.video), None)
+                    if stream is None:
+                        raise ValueError("WebM contains no video stream")
+                    frames = []
+                    for frame in container.decode(stream.index):
+                        if not globals.settings.play_gifs and frames:
+                            break
+                        pil_frame = frame.to_image().convert("RGBA")
+                        if not frames:
+                            self.width, self.height = pil_frame.size
+                        duration = frame.duration
+                        if duration is not None and frame.time_base is not None:
+                            duration_ms = round(float(duration * frame.time_base) * 1000)
+                        else:
+                            duration_ms = 100
+                        frames.append((pil_frame.tobytes("raw", "RGBA"), max(20, duration_ms) / 1000))
+                        pil_frame.close()
+
+                if not frames:
+                    raise ValueError("WebM contains no decodable frames")
+                self.textures.extend((texture, gl.GL_RGBA) for texture, _ in frames)
+                self.durations.extend(duration for _, duration in frames)
+                self.animated = len(frames) > 1
+                apply_queue.append(self)
+                self.loaded = True
+                self.loading = False
+                return
+            except Exception as exc:
+                set_invalid(f"WebM playback failed: {exc}")
+                return
 
         def build_ktx(tex_format: int, tex_pixfmt: int, width: int, height: int, frames: list[tuple[bytes, int]]):
             ktx = ktx_magic  # identifier

@@ -35,6 +35,7 @@ certifi
 
 # Archive extract
 py7zr==0.22.0
+pyzstd==0.16.2
 rarfile==4.2
 zipfile-deflate64==0.2.0 ; sys_platform != "darwin"
 zipfile-deflate64-macos==0.1.0 ; sys_platform == "darwin"
@@ -49,6 +50,7 @@ pywin32==308 ; sys_platform == "win32"
 bencode2==0.3.17
 pillow==11.0.0
 pillow-avif-plugin==1.4.6
+av==16.1.0
 zstd==1.5.6.2
 
 # Proxy support

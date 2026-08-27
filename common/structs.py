@@ -2,9 +2,11 @@ import asyncio
 import dataclasses
 import datetime as dt
 import enum
+from fractions import Fraction
 import functools
 import hashlib
 import io
+import itertools
 import json
 import os
 import pathlib
@@ -1019,6 +1021,7 @@ class Game:
     launch_process     : typing.Any = None
     image              : "imagehelper.ImageHelper" = None
     preview_images     : list["imagehelper.ImageHelper"] = dataclasses.field(default_factory=list)
+    preview_processing_errors: dict[str, str] = dataclasses.field(default_factory=dict)
     previews_loading   : bool = False
     previews_loaded    : bool = False
     preview_load_future: typing.Any = dataclasses.field(default=None, init=False, repr=False, compare=False)
@@ -1068,7 +1071,100 @@ class Game:
             # this list. Use the normal cleanup path so existing textures and
             # decoded image data are released before rebuilding it.
             self.unload_previews()
+            self.preview_processing_errors.clear()
             preview_dir = globals.images_path / f"previews/{self.id}"
+
+            def convert_gif_to_webm(data: bytes):
+                """Create a resized, animated WebM derivative from a GIF.
+
+                This runs in a worker thread because PyAV decoding and encoding
+                are CPU-bound. Timestamps are rebuilt from GIF frame durations
+                in milliseconds, which avoids dropping animation timing when
+                the source does not expose a useful average frame rate.
+                """
+                import av
+
+                with av.open(io.BytesIO(data), format="gif") as source:
+                    video_stream = next(iter(source.streams.video), None)
+                    if video_stream is None:
+                        raise ValueError("GIF contains no video stream")
+                    source_frames = source.decode(video_stream.index)
+                    first_frame = next(source_frames, None)
+                    if first_frame is None:
+                        raise ValueError("GIF contains no frames")
+
+                    source_width = first_frame.width
+                    source_height = first_frame.height
+                    target_height = 400
+                    if source_height > target_height:
+                        scale = target_height / source_height
+                        target_width = max(2, round(source_width * scale))
+                        target_height = max(2, target_height)
+                    else:
+                        target_width = source_width
+                        target_height = source_height
+                    # yuv420p requires even dimensions.
+                    target_width = max(2, target_width & ~1)
+                    target_height = max(2, target_height & ~1)
+
+                    output_bytes = io.BytesIO()
+                    codec = "libvpx-vp9" if globals.settings.preview_webm_codec is PreviewWebMCodec.VP9 else "libvpx"
+                    quality = min(max(int(globals.settings.preview_webm_quality), 1), 100)
+                    crf = round(63 - (quality / 100) * 59)
+                    speed = min(max(int(globals.settings.preview_webm_speed), 0), 10)
+                    with av.open(output_bytes, mode="w", format="webm") as output:
+                        output_stream = output.add_stream(
+                            codec,
+                            rate=1000,
+                            options={
+                                "crf": str(crf),
+                                "b": "0",
+                                "cpu-used": str(speed),
+                            },
+                        )
+                        output_stream.width = target_width
+                        output_stream.height = target_height
+                        output_stream.pix_fmt = "yuv420p"
+
+                        frames = itertools.chain((first_frame,), source_frames)
+                        timestamp_ms = 0
+                        frame_count = 0
+                        max_frames = max(int(globals.settings.preview_max_animation_frames), 0)
+                        max_duration = max(int(globals.settings.preview_max_animation_duration), 0) * 1000
+                        for frame in frames:
+                            if max_frames and frame_count >= max_frames:
+                                break
+                            if max_duration and timestamp_ms >= max_duration:
+                                break
+                            encoded_frame = frame.reformat(
+                                width=target_width,
+                                height=target_height,
+                                format="yuv420p",
+                            )
+                            encoded_frame.pts = timestamp_ms
+                            encoded_frame.time_base = Fraction(1, 1000)
+                            for packet in output_stream.encode(encoded_frame):
+                                output.mux(packet)
+
+                            duration = frame.duration
+                            if duration is not None and frame.time_base is not None:
+                                duration_ms = round(float(duration * frame.time_base) * 1000)
+                            else:
+                                duration_ms = 100
+                            timestamp_ms += max(20, duration_ms)
+                            frame_count += 1
+                        for packet in output_stream.encode():
+                            output.mux(packet)
+
+                result = output_bytes.getvalue()
+                if not result:
+                    raise ValueError("WebM encoder produced no data")
+                # Validate both the container and at least one decodable frame.
+                with av.open(io.BytesIO(result), mode="r", format="webm") as check:
+                    check_stream = next(iter(check.streams.video), None)
+                    if check_stream is None or next(check.decode(check_stream.index), None) is None:
+                        raise ValueError("encoded WebM contains no decodable frame")
+                return result
 
             def process_still(data: bytes):
                 """Return a validated, resized still-image derivative."""
@@ -1190,6 +1286,20 @@ class Game:
                                     cached_path.unlink(missing_ok=True)
                     except Exception:
                         return
+                gif_paths = [path for path in preview_dir.glob(glob) if path.suffix.lower() == ".gif"]
+                if (
+                    gif_paths
+                    and globals.settings.preview_preserve_animation
+                    and not any(path.suffix.lower() == ".webm" for path in preview_dir.glob(glob))
+                ):
+                    try:
+                        gif_data = await asyncio.to_thread(gif_paths[0].read_bytes)
+                        webm_data = await asyncio.to_thread(convert_gif_to_webm, gif_data)
+                        await write_atomic(preview_dir / f"{digest}.webm", webm_data)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        self.preview_processing_errors[digest] = str(exc)
                 self.preview_images.append(imagehelper.ImageHelper(preview_dir, glob=glob))
             digests = [hashlib.sha1(url.encode("utf-8")).hexdigest() for url in self.previews_urls]
             for img in preview_dir.glob("*"):

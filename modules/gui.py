@@ -2280,6 +2280,10 @@ class MainGUI():
                     loading_text = " · Compressing images..." if count == 1 else f" · Compressing {count} frames..."
                 elif game.previews_loading and (count := api.images_counter.count) > 0:
                     loading_text = f" · Downloading {count} image{'s' if count > 1 else ''}..."
+                elif game.preview_processing_errors:
+                    error_count = len(game.preview_processing_errors)
+                    first_error = next(iter(game.preview_processing_errors.values())).replace("\n", " ")
+                    loading_text = f" · {error_count} animation conversion error{'s' if error_count > 1 else ''}: {first_error[:120]}"
                 else:
                     loading_text = ""
                 imgui.text(f"Previews ({len(game.preview_images)}/{len(game.previews_urls)}){loading_text}")
