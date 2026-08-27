@@ -314,18 +314,29 @@ class ImageHelper:
                         pil_frame = frame.to_image().convert("RGBA")
                         if not frames:
                             self.width, self.height = pil_frame.size
-                        duration = frame.duration
-                        if duration is not None and frame.time_base is not None:
-                            duration_ms = round(float(duration * frame.time_base) * 1000)
-                        else:
-                            duration_ms = 100
-                        frames.append((pil_frame.tobytes("raw", "RGBA"), max(20, duration_ms) / 1000))
+                        # WebM decoders commonly expose a one-tick duration
+                        # even when the presentation timestamps contain the
+                        # real animation timing. Derive durations from the
+                        # distance between consecutive PTS values below.
+                        timestamp = None
+                        if frame.pts is not None and frame.time_base is not None:
+                            timestamp = float(frame.pts * frame.time_base)
+                        frames.append((timestamp, pil_frame.tobytes("raw", "RGBA")))
                         pil_frame.close()
 
                 if not frames:
                     raise ValueError("WebM contains no decodable frames")
-                self.textures.extend((texture, gl.GL_RGBA) for texture, _ in frames)
-                self.durations.extend(duration for _, duration in frames)
+                durations = []
+                for frame_i, (timestamp, _) in enumerate(frames):
+                    if frame_i + 1 < len(frames) and timestamp is not None and frames[frame_i + 1][0] is not None:
+                        duration = frames[frame_i + 1][0] - timestamp
+                    elif frame_i and frames[frame_i - 1][0] is not None and timestamp is not None:
+                        duration = timestamp - frames[frame_i - 1][0]
+                    else:
+                        duration = 0.1
+                    durations.append(max(0.02, duration))
+                self.textures.extend((texture, gl.GL_RGBA) for _, texture in frames)
+                self.durations.extend(durations)
                 self.animated = len(frames) > 1
                 apply_queue.append(self)
                 self.loaded = True

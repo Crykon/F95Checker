@@ -1245,10 +1245,24 @@ class Game:
                 # GIFs are intentionally left for Phase 4. Keep an existing
                 # GIF cache entry valid while treating compressed-only still
                 # image sidecars as a cache miss.
-                paths = source_paths or [
-                    path for path in paths
-                    if path.suffix.lower() == ".gif"
-                ]
+                gif_paths = [path for path in paths if path.suffix.lower() == ".gif"]
+                webm_paths = [path for path in paths if path.suffix.lower() == ".webm"]
+                paths = source_paths or webm_paths or gif_paths
+                if webm_paths and not source_paths:
+                    try:
+                        def validate_cached_webm(path):
+                            import av
+                            with av.open(path, mode="r", format="webm") as cached:
+                                stream = next(iter(cached.streams.video), None)
+                                if stream is None or next(cached.decode(stream.index), None) is None:
+                                    raise ValueError("WebM contains no decodable video frame")
+                        await asyncio.to_thread(validate_cached_webm, webm_paths[0])
+                        for gif_path in gif_paths:
+                            gif_path.unlink(missing_ok=True)
+                    except Exception:
+                        webm_paths[0].unlink(missing_ok=True)
+                        webm_paths = []
+                        paths = gif_paths
                 if source_paths:
                     try:
                         source_path = source_paths[0]
@@ -1286,16 +1300,20 @@ class Game:
                                     cached_path.unlink(missing_ok=True)
                     except Exception:
                         return
+                # The GIF may have been downloaded above, so refresh the
+                # source lists before deciding whether it can be converted.
                 gif_paths = [path for path in preview_dir.glob(glob) if path.suffix.lower() == ".gif"]
+                webm_paths = [path for path in preview_dir.glob(glob) if path.suffix.lower() == ".webm"]
                 if (
                     gif_paths
                     and globals.settings.preview_preserve_animation
-                    and not any(path.suffix.lower() == ".webm" for path in preview_dir.glob(glob))
+                    and not webm_paths
                 ):
                     try:
                         gif_data = await asyncio.to_thread(gif_paths[0].read_bytes)
                         webm_data = await asyncio.to_thread(convert_gif_to_webm, gif_data)
                         await write_atomic(preview_dir / f"{digest}.webm", webm_data)
+                        gif_paths[0].unlink(missing_ok=True)
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
