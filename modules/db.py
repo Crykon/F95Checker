@@ -317,6 +317,10 @@ async def connect():
             "rating":                      f'INTEGER DEFAULT 0',
             "finished":                    f'TEXT    DEFAULT ""',
             "installed":                   f'TEXT    DEFAULT ""',
+            "installed_version":           f'TEXT    DEFAULT NULL',
+            "installed_version_source":    f'TEXT    DEFAULT NULL',
+            "installed_versions":           f'TEXT    DEFAULT "[]"',
+            "installed_version_sources":    f'TEXT    DEFAULT "[]"',
             "updated":                     f'INTEGER DEFAULT NULL',
             "archived":                    f'INTEGER DEFAULT {int(False)}',
             "executables":                 f'TEXT    DEFAULT "[]"',
@@ -428,6 +432,13 @@ def sql_to_py(value: str | int | float, data_type: typing.Type):
                     content_type = args[0]
                     if hasattr(content_type, "__dataclass_fields__"):
                         value = data_type(x for x in (content_type(**x) for x in value) if x is not None)
+                    elif isinstance(content_type, types.UnionType):
+                        union_args = tuple(arg for arg in content_type.__args__ if arg is not types.NoneType)
+                        value_type = union_args[0] if len(union_args) == 1 else content_type
+                        value = data_type(
+                            x if x is None else value_type(x)
+                            for x in value
+                        )
                     else:
                         value = data_type(x for x in (content_type(x) for x in value) if x is not None)
         case _:

@@ -981,6 +981,10 @@ class Game:
     rating             : int
     finished           : str
     installed          : str
+    installed_version  : str | None
+    installed_version_source: str | None
+    installed_versions : list[str | None]
+    installed_version_sources: list[str | None]
     updated            : bool | None
     archived           : bool
     executables        : list[str]
@@ -1189,12 +1193,14 @@ class Game:
                     exe = exe.relative_to(base)
             executable = exe.as_posix()
         if executable in self.executables:
+            self.refresh_installed_versions()
             return
         self.executables.append(executable)
         from external import async_thread
         from modules import db
         async_thread.run(db.update_game(self, "executables"))
         self.validate_executables()
+        self.refresh_installed_versions()
         if self.installed != self.version:
             self.add_timeline_event(TimelineEventType.GameInstalled, self.version)
             self.installed = self.version
@@ -1206,6 +1212,7 @@ class Game:
         from modules import db
         async_thread.run(db.update_game(self, "executables"))
         self.validate_executables()
+        self.refresh_installed_versions()
 
     def clear_executables(self):
         self.executables.clear()
@@ -1213,6 +1220,22 @@ class Game:
         from modules import db
         async_thread.run(db.update_game(self, "executables"))
         self.validate_executables()
+        self.refresh_installed_versions()
+
+    def refresh_installed_versions(self):
+        from modules import game_version
+        results = game_version.detect_game_installed_versions(self)
+        self.installed_versions = [result.version for result in results]
+        self.installed_version_sources = [result.source for result in results]
+        detected = [result for result in results if result.version is not None]
+        comparable = [(game_version.version_sort_key(result.version), result) for result in detected]
+        if detected and all(key is not None for key, _ in comparable):
+            latest_linked = max(comparable, key=lambda item: item[0])[1]
+        else:
+            # Arbitrary versions such as "Chapter 3" cannot be ordered safely.
+            latest_linked = next((result for result in reversed(results) if result.version is not None), None)
+        self.installed_version = latest_linked.version if latest_linked else None
+        self.installed_version_source = latest_linked.source if latest_linked else None
 
     def add_label(self, label: Label):
         if label not in self.labels:
@@ -1272,6 +1295,10 @@ class Game:
             "rating",
             "finished",
             "installed",
+            "installed_version",
+            "installed_version_source",
+            "installed_versions",
+            "installed_version_sources",
             "updated",
             "archived",
             "executables",

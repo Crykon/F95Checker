@@ -65,6 +65,7 @@ from modules import (
     callbacks,
     colors,
     db,
+    game_version,
     globals,
     icons,
     msgbox,
@@ -1237,6 +1238,8 @@ class MainGUI():
             imgui.end_group()
 
     def draw_game_update_icon(self, game: Game):
+        local_mismatch = game_version.local_version_mismatches(game.version, game.installed_version)
+        local_outdated = game_version.local_version_is_outdated(game.version, game.installed_version)
         quick_filter = globals.settings.quick_filters
         with imgui.begin_group():
             pos = imgui.get_cursor_pos()
@@ -1246,13 +1249,21 @@ class MainGUI():
         if imgui.is_item_hovered():
             imgui.begin_tooltip()
             imgui.push_text_wrap_pos(min(imgui.get_font_size() * 35, imgui.io.display_size.x))
-            imgui.text("This game has been updated!")
+            imgui.text(
+                "This game has an available update!" if local_outdated else
+                "The local version differs from the API version." if local_mismatch else
+                "This game has been updated!"
+            )
             imgui.text_disabled("Installed:")
             imgui.same_line()
             imgui.text(game.installed or 'N/A')
             imgui.text_disabled("Latest:")
             imgui.same_line()
             imgui.text(game.version)
+            if game.installed_version:
+                imgui.text_disabled("Detected locally:")
+                imgui.same_line()
+                imgui.text(game.installed_version)
             imgui.text(
                 "To remove this update marker:\n"
                 f"{icons.menu_right} Middle click\n"
@@ -1462,6 +1473,7 @@ class MainGUI():
                 imgui.text_disabled("Latest:")
                 imgui.same_line()
                 imgui.text(game.version)
+
                 imgui.text("Click to mark latest as installed.")
                 imgui.pop_text_wrap_pos()
                 imgui.end_tooltip()
@@ -2412,13 +2424,19 @@ class MainGUI():
                 imgui.table_next_column()
                 imgui.text_disabled("Version:")
                 imgui.same_line()
-                if game.updated:
+                if game.updated or game_version.local_version_mismatches(game.version, game.installed_version):
                     self.draw_game_update_icon(game)
                     imgui.same_line()
                 if game.unknown_tags_flag:
                     self.draw_game_unknown_tags_icon(game)
                     imgui.same_line()
                 imgui.text(game.version)
+
+                imgui.table_next_row()
+                imgui.table_next_column()
+                imgui.text_disabled("Installed version:")
+                imgui.same_line()
+                imgui.text(game.installed_version or "Unknown")
 
                 imgui.table_next_column()
                 imgui.text_disabled("Added On:")
@@ -2545,7 +2563,8 @@ class MainGUI():
                 imgui.same_line()
                 self.draw_game_clear_exes_button(game, f"{icons.folder_remove_outline} Clear")
                 ended_table = False
-                for executable in game.executables:
+                for index, executable in enumerate(game.executables):
+                    version = game.installed_versions[index] if index < len(game.installed_versions) else None
                     if not ended_table and (pos_y := imgui.get_cursor_pos_y()) >= labels_end_y:
                         imgui.end_table()
                         ended_table = True
@@ -2560,6 +2579,7 @@ class MainGUI():
                     # Hack: make ImGui wrap arbitrarily by using an idegraphic space (U+3000) with 0-width font
                     ig_space = "　"
                     imgui.text(executable.replace("/", f"/{ig_space}").replace("\\", f"\\{ig_space}"))
+                    imgui.text_disabled(f"    Installed: {version or 'Unknown'}")
 
                 if not ended_table:
                     pos_y = max(imgui.get_cursor_pos_y(), labels_end_y)
@@ -3306,7 +3326,10 @@ class MainGUI():
                     case FilterMode.Type.value:
                         key = lambda game, f: (game.type is f.match)
                     case FilterMode.Updated.value:
-                        key = lambda game, f: (game.updated is True)
+                        key = lambda game, f: (
+                            game.updated is True or
+                            game_version.local_version_mismatches(game.version, game.installed_version)
+                        )
                     case _:
                         key = None
                 if key is not None:
@@ -3516,7 +3539,7 @@ class MainGUI():
                             if game.archived:
                                 self.draw_game_archive_icon(game)
                                 imgui.same_line()
-                            if game.updated:
+                            if game.updated or game_version.local_version_mismatches(game.version, game.installed_version):
                                 self.draw_game_update_icon(game)
                                 imgui.same_line()
                             if game.unknown_tags_flag:
@@ -3809,7 +3832,7 @@ class MainGUI():
             self.draw_game_archive_icon(game)
             imgui.same_line()
             cluster = True
-        if game.updated:
+        if game.updated or game_version.local_version_mismatches(game.version, game.installed_version):
             self.draw_game_update_icon(game)
             imgui.same_line()
             cluster = True

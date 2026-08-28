@@ -51,6 +51,9 @@ pillow==11.0.0
 pillow-avif-plugin==1.4.6
 zstd==1.5.6.2
 
+# Unity serialized asset parsing (used for local PlayerSettings.bundleVersion detection)
+UnityPy==1.23.0
+
 # Proxy support
 python-socks[asyncio]==2.5.3
 aiohttp-socks==0.9.1
