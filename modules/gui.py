@@ -2332,6 +2332,7 @@ class MainGUI():
                 fullscreen_viewer_start = True
                 self.fullscreen_viewer_i = 0
             if fullscreen_viewer_start:
+                self.fullscreen_viewer_zoom = 1.0
                 imgui.open_popup(fullscreen_viewer_id)
             if imgui.is_popup_open(fullscreen_viewer_id):
                 size = imgui.io.display_size
@@ -2339,29 +2340,45 @@ class MainGUI():
                 imgui.set_next_window_size(*imgui.io.display_size)
                 imgui.set_next_window_bg_alpha(0.75)
                 imgui.push_style_var(imgui.STYLE_POPUP_BORDERSIZE, 0)
-                if imgui.begin_popup(fullscreen_viewer_id, imgui.WINDOW_NO_SCROLLBAR | imgui.WINDOW_NO_SCROLL_WITH_MOUSE):
+                if imgui.begin_popup(fullscreen_viewer_id, imgui.WINDOW_NO_SCROLLBAR):
                     if imgui.is_topmost() and not imgui.is_any_item_active():
                         if imgui.is_key_pressed(glfw.KEY_LEFT, repeat=True):
                             self.fullscreen_viewer_i = (self.fullscreen_viewer_i - 1) % (len(game.preview_images) + 1)
+                            self.fullscreen_viewer_zoom = 1.0
                         if imgui.is_key_pressed(glfw.KEY_RIGHT, repeat=True):
                             self.fullscreen_viewer_i = (self.fullscreen_viewer_i + 1) % (len(game.preview_images) + 1)
+                            self.fullscreen_viewer_zoom = 1.0
                         if imgui.is_key_pressed(glfw.KEY_ESCAPE) or (imgui.is_key_pressed(glfw.KEY_SPACE) and not fullscreen_viewer_start):
                             imgui.close_current_popup()
                             fullscreen_viewer_closed = True
+                    imgui.set_scroll_y(1.0)
+                    if int(imgui.get_scroll_y() - 1.0):
+                        if globals.settings.scroll_smooth:
+                            diff = imgui.io.delta_time * self.scroll_energy
+                        else:
+                            diff = imgui.io.mouse_wheel / 10
+                        self.fullscreen_viewer_zoom = max(self.fullscreen_viewer_zoom + diff, 1.0)
                     if self.fullscreen_viewer_i:
                         image = game.preview_images[self.fullscreen_viewer_i - 1]
                     else:
                         image = game.image
-                    imgui.set_cursor_pos((0, 0))
+                    imgui.set_cursor_screen_pos((0, 0))
                     if not image.loaded:
                         # Don't show image but force it to load
                         _ = image.texture_id
+                        imgui.dummy(*size)
                     else:
                         crop = image.crop_to_ratio(size.x / size.y, fit=True)
+                        zoom = self.fullscreen_viewer_zoom
+                        mouse_pos = imgui.io.mouse_pos
+                        off_x = utils.map_range(mouse_pos.x, 0.0, size.x, 0.0, 1.0) * (zoom - 1)
+                        off_y = utils.map_range(mouse_pos.y, 0.0, size.y, 0.0, 1.0) * (zoom - 1)
+                        crop = ((crop[0][0] + off_x, crop[0][1] + off_y), (crop[1][0] + off_x, crop[1][1] + off_y))
+                        crop = ((crop[0][0] / zoom, crop[0][1] / zoom), (crop[1][0] / zoom, crop[1][1] / zoom))
                         image.render(*size, *crop)
-                        if imgui.is_item_clicked():
-                            imgui.close_current_popup()
-                            fullscreen_viewer_closed = True
+                    if imgui.is_item_clicked():
+                        imgui.close_current_popup()
+                        fullscreen_viewer_closed = True
                     imgui.end_popup()
                 imgui.pop_style_var(1)
 
