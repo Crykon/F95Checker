@@ -97,9 +97,11 @@ f95_ratelimit_forum_errors = (
 )
 f95_temp_error_messages = (
     b'<div id="cf-error-details" class="p-0">',
+    b'(function(){window._cf_chl_opt = {',
     b"<b>504 - Gateway Timeout .</b>",
     b"<title>502 Bad Gateway</title>",
     b"<title>Error 502</title>",
+    b"<title>Just a moment...</title>",
     b"An unexpected error occurred. Please try again later.",
     b"An unexpected database error occurred. Please try again later.\n<!--",
     b"<!-- Connection refused -->",
@@ -1496,7 +1498,7 @@ async def download_file(download: FileDownload):
                 download.error = f"{download.checksum[0].upper()} checksum mismatch"
                 return
 
-        if archive_format := shutil._find_unpack_format(str(download.path)):
+        if globals.settings.downloads_extract and (archive_format := shutil._find_unpack_format(str(download.path))):
             download.state = download.State.Extracting
             download.extracted = download.path.with_suffix("")
             await asyncio.get_event_loop().run_in_executor(

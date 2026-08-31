@@ -397,6 +397,7 @@ class MainGUI():
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, gl.GL_TRUE)  # OS X supports only forward-compatible core profiles from 3.2
         glfw.window_hint(glfw.VISIBLE, False)
+        glfw.window_hint_string(glfw.WAYLAND_APP_ID, "F95Checker")
 
         # Create a windowed mode window and its OpenGL context
         self.window: glfw._GLFWwindow = glfw.create_window(*size, "F95Checker", None, None)
@@ -1005,10 +1006,10 @@ class MainGUI():
                             text = f"Validating {count} cached item{'s' if count > 1 else ''}..."
                         elif globals.last_update_check is None:
                             text = "Checking for updates..."
-                        elif (count := imagehelper.compress_counter) > 0:
-                            text = "Compressing images..." if count == 1 else f"Compressing {count} frames..."
                         elif api.f95_ratelimit_forum._waiters or api.f95_ratelimit_attachments._waiters or api.f95_ratelimit_sleeping.count:
                             text = f"Waiting for F95zone ratelimit..."
+                        elif (count := imagehelper.compress_counter) > 0:
+                            text = "Compressing images..." if count == 1 else f"Compressing {count} frames..."
                         else:
                             text = self.watermark_text
                         _3 = self.scaled(3)
@@ -2210,7 +2211,7 @@ class MainGUI():
             out_height = (min(avail.y, self.scaled(690)) * self.scaled(0.4)) or 1
             out_width = avail.x or 1
             if image.error:
-                self.draw_game_image_error(game, game.image, out_width, out_height)
+                self.draw_game_image_error(game, image, out_width, out_height)
             else:
                 aspect_ratio = image.height / image.width
                 if aspect_ratio > (out_height / out_width):
@@ -2287,49 +2288,59 @@ class MainGUI():
             if globals.settings.previews_enabled and game.previews_urls:
                 if not game.previews_loaded and not game.previews_loading:
                     game.preview_load_future = async_thread.run(game.load_previews_async())
-                if (count := imagehelper.compress_counter) > 0:
-                    loading_text = " · Compressing images..." if count == 1 else f" · Compressing {count} frames..."
-                elif game.previews_loading and (count := api.images_counter.count) > 0:
+                if game.previews_loading and (count := api.images_counter.count) > 0:
                     loading_text = f" · Downloading {count} image{'s' if count > 1 else ''}..."
                 else:
                     loading_text = ""
                 imgui.text(f"Previews ({len(game.preview_images)}/{len(game.previews_urls)}){loading_text}")
-                if game.preview_images:
-                    # Keep each preview at a useful thumbnail size and put
-                    # the row in a child with an explicit horizontal bar.
-                    # Without a child, ImGui clips same-line items at the
-                    # popup boundary and the parent only scrolls vertically.
-                    preview_height = self.scaled(200)
-                    horizontal_flags = (
-                        imgui.WINDOW_HORIZONTAL_SCROLLING_BAR |
-                        imgui.WINDOW_ALWAYS_HORIZONTAL_SCROLLBAR |
-                        imgui.WINDOW_NO_SCROLLBAR
-                    )
-                    imgui.begin_child(
-                        "###game_previews_gallery",
-                        width=out_width,
-                        height=preview_height + 2 * imgui.style.window_padding.y,
-                        flags=horizontal_flags,
-                    )
-                    first = True
-                    for preview_i, preview in enumerate(game.preview_images):
-                        if not first:
-                            imgui.same_line()
-                        if preview.width != 1 or preview.height != 1:
-                            aspect_ratio = preview.width / preview.height
-                        else:
-                            # Most images are 16:9, so use this as placeholder while images are loading
-                            aspect_ratio = 16 / 9
-                        preview_width = preview_height * aspect_ratio
-                        if preview.error:
-                            self.draw_game_image_error(game, preview, preview_width, preview_height)
-                        else:
-                            preview.render(preview_width, preview_height, rounding=rounding)
-                            if imgui.is_item_clicked():
-                                fullscreen_viewer_start = True
-                                self.fullscreen_viewer_i = preview_i + 1
-                        first = False
-                    imgui.end_child()
+                # Keep each preview at a useful thumbnail size and put
+                # the row in a child with an explicit horizontal bar.
+                # Without a child, ImGui clips same-line items at the
+                # popup boundary and the parent only scrolls vertically.
+                preview_height = self.scaled(200)
+                horizontal_flags = (
+                    imgui.WINDOW_HORIZONTAL_SCROLLING_BAR |
+                    imgui.WINDOW_ALWAYS_HORIZONTAL_SCROLLBAR |
+                    imgui.WINDOW_NO_SCROLLBAR
+                )
+                imgui.begin_child(
+                    "###game_previews_gallery",
+                    width=out_width,
+                    height=preview_height + 2 * imgui.style.window_padding.y,
+                    flags=horizontal_flags,
+                )
+                # Prioritize loading cover image
+                cover_loaded = game.image.error or game.image.texture_id != imagehelper.dummy_texture_id()
+                if cover_loaded:
+                    # Once cover is loaded, start loading previews in order and keep the loaded
+                    for preview in reversed(game.preview_images):
+                        if preview is not None:
+                            _ = preview.texture_id
+                first = True
+                for preview_i, preview in enumerate(game.preview_images):
+                    if not first:
+                        imgui.same_line()
+                    if preview is not None and (preview.width != 1 or preview.height != 1):
+                        aspect_ratio = preview.width / preview.height
+                    else:
+                        # Most images are 16:9, so use this as placeholder while images are loading
+                        aspect_ratio = 16 / 9
+                    preview_width = preview_height * aspect_ratio
+                    if preview is None:
+                        # Wait for preview to download
+                        imgui.dummy(preview_width, preview_height)
+                    elif preview.error:
+                        self.draw_game_image_error(game, preview, preview_width, preview_height)
+                    elif not cover_loaded:
+                        # Wait for cover image to (start to) be loaded, trying to render previews would prioritize them
+                        imgui.dummy(preview_width, preview_height)
+                    else:
+                        preview.render(preview_width, preview_height, rounding=rounding)
+                    if imgui.is_item_clicked():
+                        fullscreen_viewer_start = True
+                        self.fullscreen_viewer_i = preview_i + 1
+                    first = False
+                imgui.end_child()
             imgui.push_text_wrap_pos()
 
             # Fullscreen image viewer
@@ -2361,18 +2372,22 @@ class MainGUI():
                     imgui.set_scroll_y(1.0)
                     if int(imgui.get_scroll_y() - 1.0):
                         if globals.settings.scroll_smooth:
-                            diff = imgui.io.delta_time * self.scroll_energy
+                            diff = imgui.io.delta_time * self.scroll_energy * 4
                         else:
-                            diff = imgui.io.mouse_wheel / 10
+                            diff = imgui.io.mouse_wheel / 2.5
                         self.fullscreen_viewer_zoom = max(self.fullscreen_viewer_zoom + diff, 1.0)
                     if self.fullscreen_viewer_i:
                         image = game.preview_images[self.fullscreen_viewer_i - 1]
                     else:
                         image = game.image
                     imgui.set_cursor_screen_pos((0, 0))
-                    if not image.loaded:
-                        # Don't show image but force it to load
-                        _ = image.texture_id
+                    if image is None:
+                        # Wait for preview to download
+                        imgui.dummy(*size)
+                    elif image.error:
+                        self.draw_game_image_error(game, image, *size)
+                    elif image.texture_id == imagehelper.dummy_texture_id():
+                        # Don't show dummy texture which is solid black
                         imgui.dummy(*size)
                     else:
                         crop = image.crop_to_ratio(size.x / size.y, fit=True)
@@ -4626,7 +4641,7 @@ class MainGUI():
 
             draw_settings_label(
                 "Zoom on hover:",
-                "Allow zooming header images inside info popups.\n"
+                "Allow zooming cover images inside info popups.\n"
                 "Tip: hold shift and scroll while hovering the image to change the zoom amount, or hold shift and alt while "
                 "scrolling to change the zoom area."
             )
@@ -4680,30 +4695,43 @@ class MainGUI():
             draw_settings_label(
                 "Tex compress:",
                 "Compress textures using ASTC (6x6/80) or BC7. If supported by GPU, results in dramatically faster image loading "
-                "with no perceptible loss in visual quality. Depending on GPU model and drivers it might also decrease VRAM "
-                "usage. Disk usage should be roughly the same (some images compress better than others, it averages out).\n\n"
+                "with no perceptible loss in visual quality, at cost of much larger space usage (for BC7). Depending on GPU model "
+                "and drivers it might also decrease VRAM usage.\n"
+                "\n"
                 "ASTC:\n"
                 "+ when supported takes 9x less VRAM\n"
-                "+ takes 20% less disk space than original images\n"
-                "+ compresses slightly faster than BC7\n"
                 "- very limited GPU support, may not work at all\n"
                 "- when unsupported may use same VRAM as uncompressed (decompressed on-the-fly)\n"
-                "- may heavily stutter when loading (due to decompressing on-the-fly)\n"
+                "+ takes ~10% less disk space than original images on average\n"
+                "+ compresses faster than BC7\n"
+                "- may heavily stutter when unsupported (due to decompressing on-the-fly)\n"
                 "BC7:\n"
                 "+ when supported takes 4x less VRAM\n"
                 "+ supported by most GPUs\n"
                 "+ more likely to decrease VRAM usage than ASTC\n"
-                "- takes 60% more disk space than original images\n"
-                "- compresses slightly slower than ASTC\n"
+                "- takes ~80% more disk space than original images on average\n"
+                "- compresses slower than ASTC\n"
                 "- not supported on MacOS\n"
-                "Visual quality tends to be equivalent.\n\n"
-                "Images are compressed when first shown, and it takes some time, especially so for GIFs. After compressing, the "
-                "result is saved to file, and next loads will be instantaneous.\n"
-                "If you're looking to compare VRAM usage, make sure to restart the tool (fully quit and reopen) between "
-                "measurements. This is because the GPU does not release VRAM until something else needs it, it's just marked "
-                "as unused, which would give the same VRAM usage number between compressed and not.\n"
-                "If only a compressed image is found it will be used even if this option is disabled (for example, if you enabled "
-                "Compress replace, the replaced images will continue to use the compressed file even if this setting is off)."
+                "Visual quality tends to be equivalent.\n"
+                "\n"
+                'Images are compressed in background, all game cover images will be compressed, in "random" order. Compressing takes '
+                "time, especially so for GIFs. However, F95Checker remains fully usable while compressing, uncompressed images are "
+                "displayed while they're being / waiting to be compressed, then switched out seamlessly once compressed, and next "
+                "loads of this image will use the compressed version and thus be nearly instantaneous.\n"
+                "\n"
+                'Due to all cover images being compressed in "random" order, comparing VRAM and space usage on a small sample size '
+                "might be tricky. Generally speaking, your best bet is BC7. If you really want to compare but have more than 50-100 games, you can try:\n"
+                "- Disable Startup > Refresh at start, disable Images > Compress Replace\n"
+                "- Close F95Checker\n"
+                "- Rename your F95Checker images directory to images.bak\n"
+                "- Open F95Checker\n"
+                "- Select a small number of games (hold ctrl/shift and click on the games)\n"
+                "- Right click > Full Recheck, this will download the images\n"
+                "- Wait 5 seconds for compression to start, then wait for all images to be compressed\n"
+                "- Toggle ASTC/BC7/Disabled, re-launching F95Checker each time, to compare VRAM\n"
+                "- Check file sizes in your file browser to compare space usage\n"
+                "- Close F95Checker\n"
+                "- Delete the F95checker images directory and rename your images.bak back"
             )
             changed, value = imgui.combo("###tex_compress", set.tex_compress._index_, TexCompress._member_names_)
             if changed:
@@ -4711,6 +4739,8 @@ class MainGUI():
                 async_thread.run(db.update_settings("tex_compress"))
                 for image in imagehelper.ImageHelper.instances:
                     image.reload()
+                with imagehelper.compress_thread_condition:
+                    imagehelper.compress_thread_condition.notify()
 
             if set.tex_compress is TexCompress.Disabled:
                 imgui.push_disabled()
@@ -5306,6 +5336,12 @@ class MainGUI():
                     start_dir=set.downloads_dir.get(globals.os),
                     callback=select_callback
                 ).tick)
+
+            draw_settings_label(
+                "Extract downloads:",
+                "Whether to extract downloads, if they are archives. Currently, only F95zone Donor DDL downloads are supported in F95Checker."
+            )
+            draw_settings_checkbox("downloads_extract")
 
             draw_settings_label("Show remove button:")
             draw_settings_checkbox("show_remove_btn")
