@@ -1,4 +1,5 @@
 # https://gist.github.com/WillyJL/9c5116e5a11abd559c56f23aa1270de9
+import contextlib
 import functools
 import os
 import pathlib
@@ -38,6 +39,9 @@ redraw = False
 apply_queue = []
 unload_queue = []
 compress_counter = 0
+_load_io_sem: threading.Semaphore = None
+_load_decode_sem: threading.Semaphore = None
+_load_decode_gif_sem: threading.Semaphore = None
 _dummy_texture_id = None
 
 ktx_durations = b"durationsms\0"
@@ -56,6 +60,15 @@ bc7_format = gl_bptc.GL_COMPRESSED_RGBA_BPTC_UNORM_ARB
 bc7_pixfmt = gl.GL_RGBA
 compressonator_encoder = None
 compressonator = None
+
+
+def setup():
+    """Initialize limits for concurrent image file and decode work."""
+    global _load_io_sem, _load_decode_sem, _load_decode_gif_sem
+    settings = globals.settings
+    _load_io_sem = threading.Semaphore(max(1, int(settings.image_io_threads)))
+    _load_decode_sem = threading.Semaphore(max(1, int(settings.image_decode_threads)))
+    _load_decode_gif_sem = threading.Semaphore(max(1, int(settings.image_decode_gif_max)))
 
 def _cpu_supports_hpc():
     from external import cpuinfo
@@ -564,7 +577,11 @@ class ImageHelper:
                 )
                 return
 
-            ktx = self.resolved_path.read_bytes()
+            with _load_io_sem:
+                if self._load_cancelled:
+                    self.loading = False
+                    return
+                ktx = self.resolved_path.read_bytes()
             time.sleep(0)
             magic = ktx[0:4]
             if magic != zstd_magic:
@@ -679,15 +696,23 @@ class ImageHelper:
         if self._load_cancelled:
             self.loading = False
             return
-        try:
-            image = Image.open(self.resolved_path)
-            image.load()
-        except UnidentifiedImageError:
-            set_invalid(f"Pillow does not recognize this image format!")
-            return
+        with _load_io_sem:
+            if self._load_cancelled:
+                self.loading = False
+                return
+            try:
+                image = Image.open(self.resolved_path)
+                image.load()
+            except UnidentifiedImageError:
+                set_invalid(f"Pillow does not recognize this image format!")
+                return
         time.sleep(0)
 
-        with image:
+        with (
+            _load_decode_gif_sem
+            if getattr(image, "n_frames", 1) > 1
+            else contextlib.nullcontext()
+        ), _load_decode_sem, image:
             self.width, self.height = image.size
             first_frame = True
             for frame in ImageSequence.Iterator(image):
